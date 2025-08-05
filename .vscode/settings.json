@@ -1,0 +1,26 @@
+{
+    "python.formatting.provider": "none",
+    "python.formatting.blackPath": "black",
+    "python.formatting.blackArgs": [],
+    "editor.formatOnSave": true,
+    "python.linting.enabled": true,
+    "python.linting.lintOnSave": true,
+    "editor.codeActionsOnSave": {
+        "source.organizeImports": "explicit"
+    },
+    "python.sortImports.path": "isort",
+    "python.sortImports.args": [
+        "--profile",
+        "black"
+    ],
+    "[python]": {
+        "editor.defaultFormatter": "ms-python.black-formatter",
+        "editor.formatOnSave": true,
+        "editor.formatOnPaste": false
+    },
+    "isort.args": [
+        "--profile",
+        "black"
+    ],
+    "black-formatter.args": []
+}
