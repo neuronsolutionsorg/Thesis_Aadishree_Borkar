@@ -1,22 +1,32 @@
 # rfi_tools.py
-import io, os, json
-from typing import List, Dict
-from azure.identity import DefaultAzureCredential
-from azure.storage.blob import BlobServiceClient
-from azure.ai.documentintelligence import DocumentIntelligenceClient
-from azure.core.credentials import AzureKeyCredential
-from dotenv import load_dotenv
-load_dotenv()  
-ACCOUNT_URL = os.environ["AZURE_STORAGE_ACCOUNT_URL"]          
-CONTAINER = os.environ.get("RFI_CONTAINER","rfi-submissions")
-RESULTS_CONTAINER = os.environ.get("RFI_RESULTS_CONTAINER","rfi-results")
+import io
+import json
+import os
+import tempfile
+from typing import Dict, List
 
-DI_ENDPOINT = os.environ["DOCUMENT_INTELLIGENCE_ENDPOINT"]
-DI_KEY = os.environ["DOCUMENT_INTELLIGENCE_KEY"]
+from azure.storage.blob import BlobServiceClient
+from dotenv import load_dotenv
+
+from utils.document_intelligence_handler import DocumentIntelligenceHandler
+from utils.handler_result import HandlerResult
+
+load_dotenv()
+ACCOUNT_URL = os.environ["AZURE_STORAGE_ACCOUNT_URL"]
+CONTAINER = os.environ.get("RFI_CONTAINER", "rfi-submissions")
+RESULTS_CONTAINER = os.environ.get("RFI_RESULTS_CONTAINER", "rfi-results")
 
 # Blob client
 conn_str = os.environ["AZURE_STORAGE_CONNECTION_STRING"]
 _blob = BlobServiceClient.from_connection_string(conn_str)
+
+# Document Intelligence handler (reads its own env vars)
+di_handler = DocumentIntelligenceHandler(
+    model_type="documentModels",
+    model_id="prebuilt-layout",
+    output_content_format="text",
+)
+
 
 def list_rfi_blobs(prefix: str = "") -> List[str]:
     container = _blob.get_container_client(CONTAINER)
@@ -34,28 +44,42 @@ def upload_result(name: str, data: bytes, container: str = RESULTS_CONTAINER):
         pass
     container_client.upload_blob(name, data, overwrite=True)
 
-# Document Intelligence
-_di = DocumentIntelligenceClient(DI_ENDPOINT, AzureKeyCredential(DI_KEY))
 
 def extract_text_tables(file_bytes: bytes, mime_type: str = None) -> Dict:
     """
     Use prebuilt layout/Read to extract plain text and tables.
     """
-    poller = _di.begin_analyze_document(
-        model_id="prebuilt-layout",
-        analyze_request=file_bytes,
-        content_type=mime_type or "application/octet-stream"
-    )
-    result = poller.result()
-    text = result.content or ""
-    tables = []
-    for t in result.tables or []:
-        rows = []
-        for r in range(t.row_count):
-            row = []
-            for c in range(t.column_count):
-                cell = next((cell for cell in t.cells if cell.row_index==r and cell.column_index==c), None)
-                row.append(cell.content if cell else "")
-            rows.append(row)
-        tables.append(rows)
-    return {"text": text, "tables": tables}
+    # Persist bytes to a temp file for the handler
+    suffix = ".bin"
+    if mime_type == "application/pdf":
+        suffix = ".pdf"
+    elif (
+        mime_type
+        == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    ):
+        suffix = ".docx"
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp.write(file_bytes)
+        tmp_path = tmp.name
+
+    res: HandlerResult = di_handler(tmp_path)
+    if not res.success:
+        raise RuntimeError(f"Document Intelligence failed: {res.error}")
+
+    analyze_result = (res.content or {}).get("analyzeResult", {})
+    text = analyze_result.get("content", "") or ""
+
+    tables_out: List[List[List[str]]] = []
+    for t in analyze_result.get("tables", []) or []:
+        row_count = int(t.get("rowCount") or 0)
+        col_count = int(t.get("columnCount") or 0)
+        grid = [["" for _ in range(col_count)] for _ in range(row_count)]
+        for cell in t.get("cells", []) or []:
+            r = int(cell.get("rowIndex") or 0)
+            c = int(cell.get("columnIndex") or 0)
+            if 0 <= r < row_count and 0 <= c < col_count:
+                grid[r][c] = cell.get("content") or ""
+        tables_out.append(grid)
+
+    return {"text": text, "tables": tables_out}
