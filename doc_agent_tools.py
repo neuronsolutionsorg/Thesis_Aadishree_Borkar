@@ -2,6 +2,7 @@
 import json
 import os
 import tempfile
+import re 
 from typing import Any, Dict, List, Optional
 
 from azure.storage.blob import BlobServiceClient
@@ -17,7 +18,7 @@ load_dotenv()
 di_handler = DocumentIntelligenceHandler(
     model_type="documentModels",
     model_id="prebuilt-layout",
-    output_content_format="markdown",
+    #output_content_format="json",
 )
 
 BLOB_CONN = os.environ["AZURE_STORAGE_CONNECTION_STRING"]
@@ -59,29 +60,44 @@ def _analyze_bytes_with_di(
 
     result_content = (res.content or {}).get("analyzeResult", {})
     content_text = result_content.get("content", "")
-    kv_pairs = result_content.get("keyValuePairs", []) or []
+    fields = extract_proposal_fields(content_text)
 
-    def by_label(*labels) -> Dict[str, Any]:
-        labels_l = [l.lower() for l in labels]
-        for kv in kv_pairs:
-            key = kv.get("key") or {}
-            key_text = (key.get("content") or "").lower()
-            if any(lbl in key_text for lbl in labels_l):
-                val = kv.get("value") or {}
-                return {
-                    "value": val.get("content"),
-                    "confidence": float(kv.get("confidence") or 0.0),
-                }
-        return {"value": None, "confidence": 0.0}
-
-    out = {
-        "vendor_name": by_label("vendor", "supplier"),
-        "delivery_date": by_label("delivery date", "expected delivery"),
-        "cost": by_label("total cost", "budget", "price", "amount"),
-        "technologies": by_label("technologies", "tech stack", "tools"),
+    return {
+        "fields": fields,
+        "preview": (content_text or "")[:1200]
     }
-    return {"fields": out, "preview": (content_text or "")[:1200]}
 
+def extract_proposal_fields(text: str) -> dict:
+    # Supplier
+    supplier = re.search(r"Supplier:\s*(.+)", text)
+    
+    # Project title (first line after Supplier)
+    title = re.search(r"Supplier:.*?\n\n(.+)", text, re.DOTALL)
+    
+    # Client / recipient
+    client = re.search(r"Proposal for\s+(.+)", text)
+    
+    # Duration
+    duration = re.search(r"Estimated duration:\s*([0-9–\-]+.*weeks)", text, re.IGNORECASE)
+    
+    # Offer Price
+    cost = re.search(r"Offer Price:\s*([\d,\.]+.*)", text, re.IGNORECASE)
+    
+    # Key Deliverables block
+    deliverables = re.search(r"Key Deliverables:(.+?)\n\n", text, re.DOTALL | re.IGNORECASE)
+    
+    # Expected Benefits block
+    benefits = re.search(r"EXPECTED BUSINESS BENEFITS(.+?)\n\nCOST ESTIMATE", text, re.DOTALL | re.IGNORECASE)
+
+    return {
+        "supplier_name": supplier.group(1).strip() if supplier else None,
+        "project_title": title.group(1).strip() if title else None,
+        "client": client.group(1).strip() if client else None,
+        "duration": duration.group(1).strip() if duration else None,
+        "offer_price": cost.group(1).strip() if cost else None,
+        "key_deliverables": deliverables.group(1).strip() if deliverables else None,
+        "expected_benefits": benefits.group(1).strip() if benefits else None,
+    }
 
 # ---- Tools the agent will call ----
 def list_container_files(prefix: Optional[str] = None) -> List[str]:

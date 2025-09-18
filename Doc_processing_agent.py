@@ -9,7 +9,7 @@ load_dotenv()
 PROJECT_ENDPOINT = os.environ["PROJECT_ENDPOINT"]
 
 def main():
-    AGENT_ID = os.environ["DOC_AGENT_ID"]  # now read it only when running
+    AGENT_ID = os.environ["DOC_AGENT_ID"]  
     project_client = AIProjectClient(
         endpoint=PROJECT_ENDPOINT,
         credential=DefaultAzureCredential(),
@@ -20,11 +20,12 @@ def main():
         print(f"Created thread, ID: {thread.id}")
 
         user_message = (
-            "Call the tool `list_container_files` with {\"prefix\": \"\"} and return only the first 5 names. "
-            "From those results, pick the first name that ends with \".pdf\". "
-            "Then call `analyze_blob_with_di` with {\"blob_name\": \"<that .pdf name>\"}. "
-            "Finally call `save_json_to_blob` with {\"target_blob_name\": \"outputs/<same-basename>.json\", \"data_json\": <the DI result>}. "
-            "Do NOT answer without calling the tools."
+            "Call `list_container_files` with {\"prefix\": \"\"} and return a few .pdf files. "
+            "Pick one .pdf file from the list. "
+            "Call `analyze_blob_with_di` with {\"blob_name\": \"<that-pdf-file>\"}. "
+            "Finally, call `save_json_to_blob` with {\"target_blob_name\": \"outputs/<same-basename>.json\", "
+            "\"data_json\": <the DI result>}. "
+            "Ensure `data_json` is exactly the full JSON output from `analyze_blob_with_di`."
             )
 
         project_client.agents.messages.create(thread_id=thread.id, role="user", content=user_message)
@@ -51,13 +52,13 @@ def main():
 
         print(f"Run completed with status: {run.status}")
 
-    messages = project_client.agents.messages.list(thread_id=thread.id)
-    print("\n--- Thread transcript ---")
-    for m in messages:
-        role = m.get("role") if isinstance(m, dict) else getattr(m, "role", None)
-        content = m.get("content") if isinstance(m, dict) else getattr(m, "content", None)
-        print(f"[{role}] {content}")
-    print("--- end transcript ---\n")
+        messages = project_client.agents.messages.list(thread_id=thread.id)
+        print("\n--- Thread transcript ---")
+        for m in messages:
+            role = m.get("role") if isinstance(m, dict) else getattr(m, "role", None)
+            content = m.get("content") if isinstance(m, dict) else getattr(m, "content", None)
+            print(f"[{role}] {content}")
+        print("--- end transcript ---\n")
 
 if __name__ == "__main__":
     main()
