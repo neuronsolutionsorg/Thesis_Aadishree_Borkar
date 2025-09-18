@@ -48,10 +48,14 @@ Rules:
 - Use ONLY the `web_search` tool for facts.
 - Prefer reputable/official sources; if unsure, add to open_questions.
 - Every nontrivial claim must be supported by a URL from the latest tool output.
+- Always return details for at least 3 suppliers (if found). 
+- Each supplier must have: name, HQ (if available), regions, capabilities, and at least 1 supporting source.
+- If fewer than 3 suppliers are found, add open questions about missing ones.
 - If data is missing, leave fields null/empty and record an open question.
 - Return ONLY the JSON described below. No extra text.
 {MARKET_SCHEMA}
 """
+
 
 def main():
     client = AIProjectClient(

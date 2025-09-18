@@ -1,52 +1,34 @@
 import json
-import datetime
-from typing import Any, Callable, Set, Dict, List, Optional
-import os, time
+import time
+import os
+from typing import Dict, Any
 from azure.identity import DefaultAzureCredential
-from azure.ai.agents.models import FunctionTool
 from azure.ai.projects import AIProjectClient
-import inspect
-from Langchain_tool_trial import web_search   #toolcall
+from market_research_agent_tools import web_search   # tool
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# Define user functions
-user_functions = {web_search} 
+# Load environment variables
+PROJECT_ENDPOINT = os.environ["PROJECT_ENDPOINT"]
+AGENT_ID = os.environ["MARKET_AGENT_ID"]   # <-- saved from create_market_research_agent.py
 
-# Set up the client
-# Retrieve the project endpoint from environment variables
-project_endpoint = os.environ["PROJECT_ENDPOINT"]
 # Initialize the AIProjectClient
 project_client = AIProjectClient(
-    endpoint=project_endpoint,
+    endpoint=PROJECT_ENDPOINT,
     credential=DefaultAzureCredential(),
     api_version="2025-05-15-preview",
 )
 
-
-
-# Initialize the FunctionTool with user-defined functions
-functions = FunctionTool(functions=user_functions)
-
 with project_client:
-    # Create an agent with custom functions
-    agent = project_client.agents.create_agent(
-        model="gpt-4o-mini",
-        name="market research agent",
-        instructions="You are a helpful agent who uses the provided tool and returns the answer to the query in a structured format.You also make sure that the information you retrieve from the internet is from legitimate and trusted sources.",
-        tools=functions.definitions,
-    )
-    print(f"Created agent, ID: {agent.id}")
-
-#3 create thread
-
+    # Create a new conversation thread
     thread = project_client.agents.threads.create()
     print(f"Created thread, ID: {thread.id}")
 
-# Send a message to the thread
+    # Ask user for a market research question
     user_question = input("Ask a market research question: ")
 
+    # Send the user message to the thread
     message = project_client.agents.messages.create(
         thread_id=thread.id,
         role="user",
@@ -54,12 +36,14 @@ with project_client:
     )
     print(f"Created message, ID: {message['id']}")
 
-#create run & check output
-
-    run = project_client.agents.runs.create(thread_id=thread.id, agent_id=agent.id)
+    # Start a run using the existing agent
+    run = project_client.agents.runs.create(
+        thread_id=thread.id,
+        agent_id=AGENT_ID
+    )
     print(f"Created run, ID: {run.id}")
 
-# Poll the run status until it is completed or requires action
+    # Poll the run status until it is completed
     while run.status in ["queued", "in_progress", "requires_action"]:
         time.sleep(1)
         run = project_client.agents.runs.get(thread_id=thread.id, run_id=run.id)
@@ -76,15 +60,25 @@ with project_client:
                     tool_outputs.append({
                         "tool_call_id": tool_call.id,
                         "output": output
-    })
+                    })
 
-                
-            project_client.agents.runs.submit_tool_outputs(thread_id=thread.id, run_id=run.id, tool_outputs=tool_outputs)
-            
+            project_client.agents.runs.submit_tool_outputs(
+                thread_id=thread.id,
+                run_id=run.id,
+                tool_outputs=tool_outputs
+            )
 
     print(f"Run completed with status: {run.status}")
 
-# Fetch and log all messages from the thread
+    # Fetch and log all messages from the thread
     messages = project_client.agents.messages.list(thread_id=thread.id)
     for message in messages:
-        print(f"Role: {message['role']}, Content: {message['content']}")
+        if message["role"] == "assistant":
+            try:
+            # Extract raw JSON string
+                raw_json = message["content"][0]["text"]["value"]
+            # Load + pretty print
+                parsed = json.loads(raw_json)
+                print(json.dumps(parsed, indent=2))
+            except Exception as e:
+                print("Assistant output (non-JSON):", message["content"])
