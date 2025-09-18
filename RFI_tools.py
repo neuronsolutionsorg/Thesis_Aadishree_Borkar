@@ -24,7 +24,7 @@ _blob = BlobServiceClient.from_connection_string(conn_str)
 di_handler = DocumentIntelligenceHandler(
     model_type="documentModels",
     model_id="prebuilt-layout",
-    output_content_format="text",
+    #output_content_format="json",
 )
 
 
@@ -62,6 +62,8 @@ def extract_text_tables(file_bytes: bytes, mime_type: str = None) -> Dict:
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         tmp.write(file_bytes)
         tmp_path = tmp.name
+        print(f"[DEBUG] Running Document Intelligence on {tmp_path}")
+
 
     res: HandlerResult = di_handler(tmp_path)
     if not res.success:

@@ -20,22 +20,27 @@ def handle_tool_call(tc):
         out = {"files": list_rfi_blobs(prefix)}
         return json.dumps(out)
 
-    # 2) Download blob -> store raw file in results container -> return pointer
+    # 2) Download blob -> return pointer (do not re-upload to results)
     if name == "download_blob":
-        data = download_blob(args["name"])
-        fname = args["name"].replace("/", "_")  # avoid slashes in blob name
-        upload_result(fname, data)
-        return json.dumps({"blob_path": f"{os.environ.get('RFI_RESULTS_CONTAINER')}/{fname}"})
+        fname = args["name"]
+        return json.dumps({
+            "blob_path": f"{os.environ.get('RFI_CONTAINER', 'rfi-submissions')}/{fname}"
+        })
 
     # 3) Extract text/tables -> store DI JSON result in results container -> return pointer
     if name == "extract_text_tables":
-        # Instead of inline base64, agent should now pass blob_path
         blob_path = args.get("blob_path")
-        if not blob_path:
-            return json.dumps({"error": "Missing blob_path argument"})
+        if not blob_path and "file_bytes" in args:
+            # fallback for older prompt behavior
+            blob_path = args["file_bytes"]
 
-        # Re-download the file from submissions container
-        fname = blob_path.split("/")[-1]
+        if not blob_path:
+            return json.dumps({"error": "Missing blob_path or file_bytes argument"})
+
+        # Normalize blob_path: strip leading "rfi-submissions/"
+        fname = blob_path.replace("rfi-submissions/", "").lstrip("/")
+
+        # Download the file from submissions container
         file_bytes = download_blob(fname)
 
         out = extract_text_tables(file_bytes, mime_type=args.get("mime_type"))
@@ -43,7 +48,9 @@ def handle_tool_call(tc):
         result_json = json.dumps(out).encode("utf-8")
         upload_result(result_name, result_json)
 
-        return json.dumps({"result_blob": f"{os.environ.get('RFI_RESULTS_CONTAINER')}/{result_name}"})
+        return json.dumps({
+            "result_blob": f"{os.environ.get('RFI_RESULTS_CONTAINER')}/{result_name}"
+        })
 
     # 4) Upload arbitrary results (CSV, Markdown, JSON)
     if name == "upload_result":
@@ -72,6 +79,9 @@ Process RFI submissions in the container. For each file:
 3) create a side-by-side CSV across all suppliers for: supplier_name, delivery_time_days, iso_27001, sla_summary, pricing_notes
 4) draft (a) buyer clarification email stubs per supplier (bullet points only), and (b) a 10-line internal summary
 5) upload per-supplier JSON, one CSV compare, and one Markdown summary to the results container.
+
+Important: when calling extract_text_tables, always pass the blob_path returned from download_blob (never file_bytes).
+
 """
         client.agents.messages.create(thread_id=thread.id, role="user", content=user_prompt)
         run = client.agents.runs.create(thread_id=thread.id, agent_id=AGENT_ID)
@@ -82,8 +92,10 @@ Process RFI submissions in the container. For each file:
             run = client.agents.runs.get(thread_id=thread.id, run_id=run.id)
 
             if run.status == "requires_action":
+                print("\nAgent requested tool calls:")
                 outs = []
                 for tc in run.required_action.submit_tool_outputs.tool_calls:
+                    print(f"- {tc.function.name} with args {tc.function.arguments}")
                     outs.append({
                         "tool_call_id": tc.id,
                         "output": handle_tool_call(tc)
@@ -92,11 +104,12 @@ Process RFI submissions in the container. For each file:
                     thread_id=thread.id, run_id=run.id, tool_outputs=outs
                 )
 
-        # Show assistant outputs
+        
+        # Show all conversation messages (user + assistant + system)
         messages = client.agents.messages.list(thread_id=thread.id)
         for m in messages:
-            if m["role"] == "assistant":
-                print(m["content"])
+            print(f"[{m['role']}] {m['content']}")
+
 
 
 if __name__ == "__main__":
